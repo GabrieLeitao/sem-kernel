@@ -1,0 +1,1208 @@
+\documentclass[a4paper,12pt]{report}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tcolorbox}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{titlesec}
+\usepackage{parskip}
+
+% Geometry
+\geometry{
+    top=2.5cm,
+    bottom=2.5cm,
+    left=2.5cm,
+    right=2.5cm
+}
+
+% Colors
+\definecolor{codebg}{rgb}{0.95,0.95,0.95}
+\definecolor{linuxbg}{rgb}{0.9,0.95,1.0}
+\definecolor{linuxborder}{rgb}{0.2,0.4,0.8}
+
+% Listings Setup
+\lstset{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    captionpos=b,
+    commentstyle=\color{green!50!black},
+    keywordstyle=\color{blue},
+    stringstyle=\color{red},
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny,
+    showstringspaces=false,
+    tabsize=4
+}
+
+% Custom Environments
+\newtcolorbox{linuxinsight}[1][]{
+    colback=linuxbg,
+    colframe=linuxborder,
+    title=\textbf{Linux},
+    fonttitle=\bfseries,
+    #1
+}
+
+\newtcolorbox{labchallenge}[1][]{
+    colback=orange!10,
+    colframe=orange!80!black,
+    title=\textbf{Lab Challenge},
+    fonttitle=\bfseries,
+    #1
+}
+
+% Meta Data
+\title{\textbf{Operating System Development}\\ \large An Introduction to OS Development}
+\author{based on the os-tutorial by cfenollosa}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+
+\chapter*{Introduction}
+\addcontentsline{toc}{chapter}{Introduction}
+
+Welcome to the journey of creating your own operating system. This text serves as a modern successor to previous tutorials, integrating rigorous engineering practices with the hands-on "learn by doing" philosophy. 
+
+We will start from the absolute basics---a computer booting up---and build our way up to a functional kernel with a shell, memory management, and multitasking.
+
+\section*{Prerequisites}
+You should be comfortable with:
+\begin{itemize}
+    \item Command-line interfaces (Linux/Unix shell).
+    \item Basic C programming (pointers, memory).
+    \item Basic understanding of computer architecture (registers, stack, memory).
+\end{itemize}
+
+\chapter*{The Environment}
+
+Before we write a single line of code, we must understand the tools of our trade. Operating system development requires a specific set of tools that are often different from standard application development.
+
+\section*{The Philosophy of the Toolchain}
+
+In the early days of computing, a programmer wrote code specifically for the machine they were sitting at. There was no concept of "cross-compiling" because the hardware was the OS. As systems became more complex, we needed a way to build software for a "target" machine that might not even be running yet. This is the essence of OS development: you are building the foundation upon which everything else rests.
+
+\section*{The Toolchain}
+
+To build an operating system, we need three primary tools:
+\begin{enumerate}
+    \item \textbf{A Compiler (GCC):} To translate our C code into machine code.
+    \item \textbf{A Assembler (NASM):} To translate our assembly code into machine code.
+    \item \textbf{A Emulator (QEMU):} To run and test our operating system safely.
+\end{enumerate}
+
+\subsection*{Why a Cross-Compiler?}
+One of the most common mistakes for beginners is trying to use their system's default compiler (e.g., `gcc` on Ubuntu) to build their kernel. This is problematic because your system's `gcc` assumes it is building programs for your current OS (Linux, macOS, etc.). It tries to link against standard libraries (`glibc`) and use headers that rely on system calls that \textit{don't exist yet} in your OS.
+
+Therefore, we use a \textbf{Cross-Compiler}. This is a version of GCC compiled specifically to generate code for a generic target (like \texttt{i686-elf}) without assuming any underlying operating system. This ensures that the generated binary is "freestanding"—it contains nothing but your code and a few essential support routines.
+
+\begin{linuxinsight}
+    \textbf{Kbuild and the Kernel Toolchain}
+    
+    In the modern Linux kernel, the build system is known as \textbf{Kbuild}. It handles the complex dependency tracking and compilation flags required for the massive codebase.
+    
+    Linux developers also use cross-compilers extensively. For example, an x86\_64 developer might build a kernel for an ARM-based Android device using a command like:
+    \begin{verbatim}
+make ARCH=arm CROSS_COMPILE=arm-linux-gnueabi-
+    \end{verbatim}
+    This ensures that the generated machine code is correct for the target processor, regardless of the host machine.
+\end{linuxinsight}
+
+\section*{Setting Up}
+
+We will be using Linux as our host environment. If you are on macOS or Windows, it is highly recommended to use a Linux Virtual Machine (VM) or WSL2 (Windows Subsystem for Linux).
+
+\subsection*{Installing Dependencies}
+
+On a Debian/Ubuntu-based system, you can install the necessary tools with:
+
+\begin{lstlisting}[language=bash]
+sudo apt-get update
+sudo apt-get install build-essential nasm qemu-system-x86 gdb
+\end{lstlisting}
+
+\begin{itemize}
+    \item \textbf{nasm:} The Netwide Assembler. We use this for our assembly files (\texttt{.asm}).
+    \item \textbf{qemu-system-x86:} A fast emulator that simulates an x86 computer.
+    \item \textbf{gdb:} The GNU Debugger, essential for inspecting what went wrong when your kernel crashes.
+\end{itemize}
+
+\subsection*{Building the Cross-Compiler}
+
+As discussed, we need a cross-compiler. Since pre-built binaries can be outdated or incompatible with your system, we will build \texttt{i686-elf-gcc} and \texttt{binutils} from source. We will install them in your \textbf{home directory} to avoid requiring \texttt{sudo} and to keep your system clean.
+
+\subsubsection*{1. Preparation}
+First, install the host build dependencies. On Ubuntu/Debian:
+\begin{lstlisting}[language=bash]
+sudo apt install build-essential bison flex libgmp3-dev libmpfr-dev libmpc-dev texinfo libisl-dev
+\end{lstlisting}
+
+Now, set up your environment variables. Add these to your \texttt{.bashrc} or \texttt{.zshrc} later:
+\begin{lstlisting}[language=bash]
+export PREFIX="$HOME/opt/cross"
+export TARGET=i686-elf
+export PATH="$PREFIX/bin:$PATH"
+\end{lstlisting}
+
+\subsubsection*{2. Binutils}
+Binutils provides the assembler (\texttt{as}), linker (\texttt{ld}), and other tools. We'll use a modern version (e.g., 2.40+).
+\begin{lstlisting}[language=bash]
+mkdir -p $HOME/src
+cd $HOME/src
+wget https://ftp.gnu.org/gnu/binutils/binutils-2.40.tar.gz
+tar -xzf binutils-2.40.tar.gz
+mkdir build-binutils
+cd build-binutils
+../binutils-2.40/configure --target=$TARGET --prefix="$PREFIX" --with-sysroot --disable-nls --disable-werror
+make
+make install
+\end{lstlisting}
+
+\subsubsection*{3. GCC (The Compiler)}
+Now we build GCC itself. We only need the C compiler for now. We will use a modern version (e.g., 13.1.0+).
+\begin{lstlisting}[language=bash]
+cd $HOME/src
+wget https://ftp.gnu.org/gnu/gcc/gcc-13.1.0/gcc-13.1.0.tar.gz
+tar -xzf gcc-13.1.0.tar.gz
+mkdir build-gcc
+cd build-gcc
+../gcc-13.1.0/configure --target=$TARGET --prefix="$PREFIX" --disable-nls --enable-languages=c,c++ --without-headers
+make all-gcc
+make all-target-libgcc
+make install-gcc
+make install-target-libgcc
+\end{lstlisting}
+
+You may want to add the \texttt{i686elfgcc/bin} folder to \texttt{\$PATH} by exporting in \texttt{.bashrc} (or \texttt{.zshrc}) to be persistent on other sessions.
+
+\begin{linuxinsight}
+    \textbf{Self-Hosting and Toolchains}
+    
+    A compiler is "self-hosting" when it can compile its own source code. When you build the Linux kernel, you are typically using a compiler that was itself built by another compiler. 
+    
+    In professional environments (and Linux distribution build farms), toolchains are often managed using tools like \texttt{crosstool-NG}, which automates the complex process of matching GCC, Binutils, and C library versions to ensure a stable and reproducible build environment.
+\end{linuxinsight}
+
+\section*{Testing Your Setup}
+
+Let's verify that QEMU is working. We don't have an OS yet, but we can verify the emulator launches.
+
+\begin{lstlisting}[language=bash]
+qemu-system-i386
+\end{lstlisting}
+
+You should see a window pop up looking for a bootable disk. Since we haven't provided one, it will likely say "No bootable device." This is good! It means the emulator is working.
+
+\section{The Roadmap}
+
+Our development process will follow these stages:
+\begin{enumerate}
+    \item \textbf{Bootloader:} Write x86 assembly to instruct the BIOS to load our kernel.
+    \item \textbf{Real Mode to Protected Mode:} Transition from the 16-bit legacy environment to the 32-bit world.
+    \item \textbf{Kernel Entry:} Jump from assembly to C.
+    \item \textbf{Drivers:} Write code to talk to hardware (Screen, Keyboard, Timer).
+    \item \textbf{Interrupts:} Handle hardware events.
+    \item \textbf{Memory Management:} Allocate and free memory.
+    \item \textbf{Filesystem \& Shell:} A user interface for our OS.
+\end{enumerate}
+
+\section{Knowledge Check}
+
+\begin{enumerate}
+    \item Why can't we just use the standard `gcc` installed on our Linux machine to compile our kernel?
+    \item What is the role of `nasm` in our toolchain?
+    \item What does QEMU provide that allows us to develop without constantly rebooting our physical machine?
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: Toolchain Inspection}
+    
+    Verify your cross-compiler is working by creating a dummy C file and checking its target architecture:
+    \begin{lstlisting}[language=bash]
+echo "int main() { return 0; }" > test.c
+i686-elf-gcc -ffreestanding -c test.c -o test.o
+readelf -h test.o
+    \end{lstlisting}
+    Confirm that the "Machine" field in the output says \texttt{Intel 80386}. If it says \texttt{Advanced Micro Devices X86-64}, your cross-compiler is not correctly configured!
+\end{labchallenge}
+
+\chapter{The Boot Sector (Bare Bones)}
+
+\section{The Logic: The 512-byte Constraint}
+
+In the 1970s and 80s, storage was incredibly expensive and limited. When the original IBM PC was designed, the BIOS designers decided that the very first sector of a disk (512 bytes) would be the "boot sector." This tiny space was all you had to load the rest of your operating system. This forced early programmers to be extremely clever with their assembly code—a tradition of optimization that continues in modern kernels where every byte of memory still counts.
+
+\section{The Theory: How a Computer Boots}
+
+When you press the power button, the computer doesn't know how to run an operating system. It relies on a piece of software built into the motherboard called the \textbf{BIOS} (Basic Input/Output System).
+
+The BIOS performs a Power-On Self-Test (POST) and then looks for a bootable device (Floppy, CD, Hard Disk, USB). When it finds one, it looks for the specific signature \texttt{0x55} and \texttt{0xAA} in the last two bytes of the first 512-byte sector.
+
+If found, it loads those 512 bytes into memory at address \texttt{0x7C00}. Why \texttt{0x7C00}? It was a strategic choice by IBM engineers: it's at the end of the first 32KB of RAM, leaving enough room for the OS to grow downwards without hitting the BIOS data area at \texttt{0x0000}.
+
+\begin{linuxinsight}
+    \textbf{UEFI vs. BIOS}
+    
+    Modern computers (post-2010) largely use \textbf{UEFI} (Unified Extensible Firmware Interface) instead of the legacy BIOS. UEFI is capable of reading file systems (like FAT32) and loading executable files directly.
+    
+    However, legacy BIOS booting is still supported via CSM (Compatibility Support Module) and is excellent for learning because it forces you to understand the raw hardware constraints without the massive complexity of the UEFI specification.
+\end{linuxinsight}
+
+\section{Our First Boot Sector}
+
+The simplest boot sector is one that does nothing but loop forever. Open a file named \texttt{boot\_sect\_simple.asm} and enter the following:
+
+\begin{lstlisting}[language={[x86masm]Assembler}]
+; A simple boot sector program that loops forever
+loop:
+    jmp loop
+
+; Padding and magic number
+times 510-($-$$) db 0
+dw 0xaa55
+\end{lstlisting}
+
+\subsection{Breaking it Down}
+\begin{itemize}
+    \item \texttt{loop: jmp loop}: This is an infinite loop. \texttt{jmp} is the assembly instruction for "jump", and \texttt{loop} is a label pointing to the current instruction.
+    \item \texttt{times 510-(\$-\$\$) db 0}: This is a NASM directive. It tells the assembler to fill the rest of the 510 bytes with zeros. \texttt{\$} is the current position, and \texttt{\$\$} is the start of the section.
+    \item \texttt{dw 0xaa55}: This writes the 2-byte magic number \texttt{0xAA55} (in little-endian format, so it's actually \texttt{55 AA} in the file).
+\end{itemize}
+
+\section{Compiling and Running}
+
+To compile this into raw binary format (no headers, just machine code), use:
+\begin{lstlisting}[language=bash]
+nasm -f bin boot_sect_simple.asm -o boot_sect_simple.bin
+\end{lstlisting}
+
+Then, run it with QEMU:
+\begin{lstlisting}[language=bash]
+qemu-system-i386 boot_sect_simple.bin
+\end{lstlisting}
+
+\section{Knowledge Check}
+\begin{enumerate}
+    \item What is the exact memory address where the BIOS loads the boot sector?
+    \item What happens if the last two bytes are \texttt{0x1234} instead of \texttt{0xAA55}?
+    \item What is the purpose of the \texttt{times} directive in this context?
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: The BIOS Handover}
+    
+    Run QEMU with the \texttt{-d cpu} flag to see the state of the CPU at boot time:
+    \begin{lstlisting}[language=bash]
+qemu-system-i386 -d cpu -D qemu.log boot_sect_simple.bin
+    \end{lstlisting}
+    Open \texttt{qemu.log} and find the initial \texttt{EIP} (Instruction Pointer). It should be near \texttt{0x7C00}. Notice how the registers are mostly empty—the BIOS has just handed over the keys to the kingdom to your code.
+\end{labchallenge}
+
+\chapter{Printing to the Screen}
+
+Now that we can boot, let's make the computer say something. In the early stages of OS development, we don't have a screen driver, so we rely on the BIOS.
+
+\section{The Logic: The BIOS as an API}
+
+Before operating systems like DOS or Windows existed, the BIOS provided the only "API" for programmers. By triggering software interrupts, you could ask the motherboard to do complex things like print text, draw pixels, or read from a disk. This was the first "Hardware Abstraction Layer" (HAL). In this chapter, we use the BIOS as our library to communicate with the display hardware.
+
+\section{BIOS Interrupts}
+
+The BIOS provides a set of services accessible via \textbf{Interrupts}. An interrupt pauses the current execution and jumps to a predefined handler in the BIOS memory.
+
+For video services, we use \texttt{int 0x10}. To print a character, we must:
+\begin{enumerate}
+    \item Set the register \texttt{ah} to \texttt{0x0e} (Teletype Mode).
+    \item Set the register \texttt{al} to the ASCII character we want to print.
+    \item Call \texttt{int 0x10}.
+\end{enumerate}
+
+\section{Registers: The CPU's Scratchpad}
+
+Registers are small, lightning-fast storage locations inside the CPU. In 16-bit real mode, the general-purpose registers are 16 bits wide: \texttt{ax}, \texttt{bx}, \texttt{cx}, and \texttt{dx}.
+
+Each can be split into two 8-bit registers. For example, \texttt{ax} consists of \texttt{ah} (high byte) and \texttt{al} (low byte).
+
+\section{Hello, World! in Assembly}
+
+Create \texttt{boot\_sect\_hello.asm}:
+
+\begin{lstlisting}[language={[x86masm]Assembler}]
+mov ah, 0x0e ; BIOS tele-type output
+mov al, 'H'
+int 0x10
+mov al, 'e'
+int 0x10
+mov al, 'l'
+int 0x10
+int 0x10 ; 'l' is still in al
+mov al, 'o'
+int 0x10
+
+jmp $ ; Loop forever ($ means current address)
+
+times 510-($-$$) db 0
+dw 0xaa55
+\end{lstlisting}
+
+\begin{linuxinsight}
+    \textbf{System Calls vs. BIOS Interrupts}
+    
+    In modern Linux, user programs don't use BIOS interrupts to print text. Instead, they use \textbf{System Calls} (\texttt{syscall} on x86\_64 or \texttt{int 0x80} on x86).
+\end{linuxinsight}
+
+\section{Knowledge Check}
+\begin{enumerate}
+    \item What register is used to select the BIOS video sub-function?
+    \item Why did we only set \texttt{ah} once in the "Hello" example?
+    \item What does the \texttt{\$} symbol represent in the \texttt{jmp \$} instruction?
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Infinite Hello}
+    
+    Modify your bootloader to print a single character repeatedly in a loop. Use the \texttt{jmp} instruction to go back to the start of your print routine. How fast does it fill the screen? This demonstrates the raw power of direct hardware control before any OS overhead is added. Run it in QEMU and observe.
+\end{labchallenge}
+
+\chapter{Memory Organization}
+
+In the previous chapters, we printed characters by moving literals directly into registers. However, real programs need to store and retrieve data from memory. Understanding how the x86 processor addresses memory in Real Mode is crucial.
+
+\section{The Logic: The "Offset" Reality}
+
+In assembly, labels are just nicknames for numbers—specifically, the number of bytes from the start of the file. However, because our code is loaded at \texttt{0x7C00}, every label's "true" address is its position in the file \textbf{plus 0x7C00}. If we forget this, we'll try to read data from the wrong part of memory. This "absolute vs relative" addressing is a core concept in systems programming.
+
+\section{The 0x7C00 Problem}
+
+We know the BIOS loads our 512-byte boot sector at address \texttt{0x7C00}. This means that if we define a label in our code, its actual memory address will be its offset from the start of the file \textit{plus} \texttt{0x7C00}.
+
+Consider this code:
+\begin{lstlisting}[language={[x86masm]Assembler}]
+the_secret:
+    db "X"
+
+; ... later in the code ...
+mov al, [the_secret] ; This will likely fail!
+\end{lstlisting}
+
+If \texttt{the\_secret} is at the 10th byte of our file, the assembler thinks its address is \texttt{0x0A}. But in RAM, it's actually at \texttt{0x7C0A}. The CPU will look at address \texttt{0x0A} (which contains BIOS data) instead of our "X".
+
+\section{The [org] Directive}
+
+We can solve this in two ways:
+\begin{enumerate}
+    \item Manually add \texttt{0x7C00} to every memory access (tedious and error-prone).
+    \item Use the \texttt{[org 0x7C00]} directive at the top of our assembly file.
+\end{enumerate}
+
+The \texttt{org} (origin) directive tells the assembler to add a specific offset to all internal label calculations.
+
+\begin{lstlisting}[language={[x86masm]Assembler}]
+[org 0x7c00]
+mov ah, 0x0e
+mov al, [the_secret] ; Now this works!
+int 0x10
+
+jmp $
+
+the_secret:
+    db "X"
+
+times 510-($-$$) db 0
+dw 0xaa55
+\end{lstlisting}
+
+\begin{linuxinsight}
+    \textbf{Virtual Memory and Relocation}
+    
+    In modern Linux, processes don't worry about where they are loaded in physical RAM. This is thanks to \textbf{Virtual Memory}. Every process thinks it starts at a standard address (e.g., \texttt{0x400000} for 64-bit ELF binaries).
+    
+    The Memory Management Unit (MMU) of the CPU, managed by the Linux kernel, translates these virtual addresses into physical ones on the fly using \textbf{Page Tables}.
+    
+    Furthermore, Linux uses \textbf{ASLR} (Address Space Layout Randomization) to load programs at random offsets to make it harder for attackers to exploit memory-based vulnerabilities. This is like a dynamic version of the \texttt{org} directive!
+\end{linuxinsight}
+
+\section{Knowledge Check}
+\begin{enumerate}
+    \item Why doesn't \texttt{mov al, the\_secret} (without brackets) work to print the character 'X'?
+    \item What is the difference between \texttt{mov al, [0x7c10]} and \texttt{mov al, 0x7c10}?
+    \item How does the \texttt{[org]} directive change the generated machine code? (Hint: It doesn't!)
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: Memory Scavenger Hunt}
+    
+    Write a boot loader that prints the byte stored at memory address \texttt{0x0000:0x0475}. This specific address in the BIOS Data Area contains the number of disk drives detected by the system. Use your knowledge of memory addressing to retrieve and print this value (you'll need to convert the numeric value to an ASCII digit by adding \texttt{0x30}).
+\end{labchallenge}
+
+\chapter{The Stack}
+
+As we write more complex programs, we need a way to store temporary data and manage function calls. This is where the \textbf{Stack} comes in.
+
+\section{The Logic: Why Downwards?}
+
+One of the most confusing things for beginners is that the stack grows \textbf{downwards} (towards lower memory addresses). This design choice dates back to the earliest computers where memory was extremely limited. By having the "Heap" (dynamic data) grow upwards and the "Stack" (function data) grow downwards from the opposite end of memory, they could both expand until they met in the middle. This maximized the use of available RAM.
+
+\section{How the Stack Works}
+
+The x86 stack is a LIFO (Last-In, First-Out) data structure. Two registers manage it:
+\begin{itemize}
+    \item \textbf{bp (Base Pointer):} Points to the "bottom" (highest address) of the stack.
+    \item \textbf{sp (Stack Pointer):} Points to the "top" (lowest address) where the next value will be pushed.
+\end{itemize}
+
+When you \texttt{push} a value:
+\begin{enumerate}
+    \item \texttt{sp} is decremented (by 2 bytes in 16-bit mode).
+    \item The value is stored at the address in \texttt{sp}.
+\end{enumerate}
+
+When you \texttt{pop} a value:
+\begin{enumerate}
+    \item The value at \texttt{sp} is copied to a register.
+    \item \texttt{sp} is incremented.
+\end{enumerate}
+
+\section{Setting Up the Stack}
+
+In the bootloader, we must manually initialize \texttt{bp} and \texttt{sp}. We should pick an address far away from our code (\texttt{0x7C00}) so they don't collide. \texttt{0x8000} is a safe choice.
+
+\begin{lstlisting}[language={[x86masm]Assembler}]
+mov bp, 0x8000
+mov sp, bp
+
+push 'A'
+push 'B'
+push 'C'
+
+pop ax
+mov al, ah ; Note: push/pop work on 16-bit words (ax), not 8-bit (al)
+; ... print al ...
+\end{lstlisting}
+
+\begin{linuxinsight}
+    \textbf{Kernel Stacks and Guard Pages}
+    
+    In Linux, every task (thread/process) has its own kernel stack (usually 8KB or 16KB). If a function calls itself too many times (infinite recursion), the stack will "overflow."
+\end{linuxinsight}
+
+\section{Knowledge Check}
+\begin{enumerate}
+    \item If \texttt{bp} is \texttt{0x8000} and you push a 16-bit value, what is the new value of \texttt{sp}?
+    \item Why does the stack grow downwards instead of upwards?
+    \item Can you push a single 8-bit register like \texttt{al} onto the stack?
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: Stack Reversal}
+    
+    Write a boot sector that pushes the characters of your name onto the stack one by one. Then, use a loop to pop them off and print them. Because of the LIFO nature of the stack, your name will be printed in reverse! This is a classic exercise in understanding stack mechanics.
+\end{labchallenge}
+
+\chapter{Functions and Strings}
+
+As our bootloader grows, we need to organize our code into reusable blocks. In assembly, we use \textbf{labels} and the \textbf{stack} to implement functions.
+
+\section{The Logic: The Birth of Modularity}
+
+Early programmers wrote "spaghetti code"—one long sequence of instructions with frequent jumps. As programs grew, this became impossible to manage. The invention of the \texttt{call} and \texttt{ret} instructions allowed for the creation of "subroutines." This was a revolutionary step that led directly to modern modular software architecture.
+
+\section{Strings in Assembly}
+
+A string is just a sequence of bytes in memory. By convention (borrowed from C), we terminate strings with a null byte (\texttt{0x00}) so our code knows where the string ends.
+
+\begin{lstlisting}[language={[x86masm]Assembler}]
+MY_STRING:
+    db 'Hello, OS World!', 0
+\end{lstlisting}
+
+\section{Control Flow: Loops and Conditionals}
+
+Assembly uses the \texttt{cmp} (compare) instruction followed by conditional jumps like \texttt{je} (jump if equal), \texttt{jne} (jump if not equal), or \texttt{jl} (jump if less than).
+
+\section{The Function Mechanism: call and ret}
+
+To call a function, we use the \texttt{call} instruction. This does two things:
+\begin{enumerate}
+    \item Pushes the address of the \textit{next} instruction onto the stack (the return address).
+    \item Jumps to the function label.
+\end{enumerate}
+
+The \texttt{ret} instruction at the end of the function pops that address from the stack and jumps back to it.
+
+\section{A Reusable Print Function}
+
+Here is a function that prints a null-terminated string. It expects the string's address in the \texttt{bx} register.
+
+\begin{lstlisting}[language={[x86masm]Assembler}]
+print:
+    pusha           ; Save all registers to the stack
+.loop:
+    mov al, [bx]    ; Move char at [bx] into al
+    cmp al, 0       ; Is it the null terminator?
+    je .done
+    
+    mov ah, 0x0e    ; BIOS tty mode
+    int 0x10        ; Print character
+    
+    add bx, 1       ; Move to next character
+    jmp .loop
+.done:
+    popa            ; Restore registers
+    ret
+\end{lstlisting}
+
+\begin{linuxinsight}
+    \textbf{The C Calling Convention (ABI)}
+    
+    In modern Linux, when a C function calls another, it follows a strict \textbf{Application Binary Interface (ABI)}.
+\end{linuxinsight}
+
+\section{Knowledge Check}
+\begin{enumerate}
+    \item What would happen if a function forgot to call \texttt{ret}?
+    \item Why is \texttt{pusha} important at the beginning of a function?
+    \item How does the CPU know where to return to after a \texttt{call}?
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Hexadecimal Bridge}
+    
+    Implement a function \texttt{print\_hex} that takes a 16-bit value in \texttt{dx} and prints it in hex format (e.g., \texttt{0x12FE}). This requires you to master bitwise operations (\texttt{and}, \texttt{shr}) and ASCII conversion. Look at \texttt{boot/print\_hex.asm} in the repository for the definitive implementation used in our kernel. Try to explain why we use the \texttt{ror} instruction in the loop.
+\end{labchallenge}
+
+\chapter{Segmentation}
+
+Real Mode has a major limitation: 16-bit registers can only address $2^{16} = 64$ KB of memory. To access more (up to 1 MB), x86 uses \textbf{Segmentation}.
+
+\section{The Logic: The 8086 Hack}
+
+When Intel designed the 8086 processor, they wanted to address 1 MB of RAM, which requires 20 bits. However, they only had 16-bit registers. Their solution was "segmentation": combining two 16-bit registers to create a 20-bit address. While brilliant at the time, it became the "original sin" of x86 architecture, leading to decades of complexity that we are still dealing with today.
+
+\section{Segment:Offset Addressing}
+
+The CPU calculates a physical address using a \textbf{Segment Register} and an \textbf{Offset}:
+\[ \text{Physical Address} = (\text{Segment} \times 16) + \text{Offset} \]
+
+For example, if the Data Segment (\texttt{ds}) is \texttt{0x7C0} and the offset is \texttt{0x0010}, the physical address is:
+\[ (0x7C0 \times 16) + 0x0010 = 0x7C00 + 0x0010 = 0x7C10 \]
+
+\section{The Segment Registers}
+\begin{itemize}
+    \item \textbf{cs:} Code Segment (for instructions).
+    \item \textbf{ds:} Data Segment (for variables).
+    \item \texttt{ss:} Stack Segment (for the stack).
+    \item \textbf{es, fs, gs:} Extra segments for general use.
+\end{itemize}
+
+\section{Important Note on segments}
+You cannot move a literal value directly into a segment register. You must move it into a general-purpose register first:
+\begin{lstlisting}[language={[x86masm]Assembler}]
+mov ax, 0x7c0
+mov ds, ax      ; Valid
+; mov ds, 0x7c0 ; Invalid!
+\end{lstlisting}
+
+\begin{linuxinsight}
+    \textbf{The Death of Segmentation}
+    
+    In 64-bit mode (long mode), Linux treats memory as one giant "flat" space. The segment registers \texttt{cs, ds, es, ss} are mostly ignored or forced to 0.
+\end{linuxinsight}
+
+\section{Knowledge Check}
+\begin{enumerate}
+    \item What is the physical address of \texttt{0x1000:0x1234}?
+    \item Why was segmentation invented instead of just using 32-bit registers from the start?
+    \item How does \texttt{[org 0x7c00]} relate to segmentation?
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Segment Overlap}
+    
+    Because of the way physical addresses are calculated, multiple (Segment:Offset) pairs can point to the same physical address. Find three different pairs that all point to \texttt{0x7C00}. Write a bootloader that sets \texttt{ds} to one of these values and successfully reads data using an offset of 0. This experiment proves that memory is just one flat array, despite the segment "lenses" we use to look at it.
+\end{labchallenge}
+
+\chapter{Reading from Disk}
+
+Our OS will eventually grow much larger than 512 bytes. To load our kernel, we must use the BIOS to read subsequent sectors from the disk into memory.
+
+\section{The Logic: The Spinning Platter}
+
+In the 1980s, disks were literal spinning magnetic platters. To read data, a physical arm had to move to a specific "Cylinder," wait for the disk to spin to the right "Sector," and use a specific "Head" for the top or bottom of the platter. This physical reality defined the CHS addressing system. Even today, though we use SSDs with no moving parts, the legacy of CHS still exists in the BIOS and partition tables.
+
+\section{CHS Addressing}
+
+In the early days of PCs, disks were addressed by their physical geometry:
+\begin{itemize}
+    \item \textbf{Cylinder:} The concentric circle on the platter.
+    \item \textbf{Head:} Which side of the platter (top or bottom).
+    \item \textbf{Sector:} The specific 512-byte slice of a track.
+\end{itemize}
+
+\textbf{Crucial Note:} Sectors are 1-indexed (they start at 1), while cylinders and heads are 0-indexed. Our bootloader is at Cylinder 0, Head 0, Sector 1.
+
+\section{BIOS Interrupt 0x13}
+
+To read from disk, we use \texttt{int 0x13} with \texttt{ah = 0x02}.
+\begin{itemize}
+    \item \texttt{al}: Number of sectors to read.
+    \item \texttt{ch}: Cylinder number.
+    \item \texttt{cl}: Sector number (1-63).
+    \item \texttt{dh}: Head number.
+    \item \texttt{dl}: Drive number (BIOS sets this for us).
+    \item \texttt{es:bx}: Buffer address where data will be stored.
+\end{itemize}
+
+\section{The Carry Bit}
+
+If a BIOS disk operation fails, it sets the \textbf{Carry Flag (CF)} in the CPU's status register. We can check this using the \texttt{jc} (Jump if Carry) instruction.
+
+\begin{lstlisting}[language={[x86masm]Assembler}]
+disk_load:
+    pusha
+    mov ah, 0x02    ; BIOS read function
+    mov al, dh      ; Read 'dh' sectors
+    mov cl, 0x02    ; Start from sector 2
+    mov ch, 0x00    ; Cylinder 0
+    mov dh, 0x00    ; Head 0
+    ; dl is set by the BIOS
+    int 0x13
+    jc disk_error   ; Jump if the Carry Flag is set
+    popa
+    ret
+\end{lstlisting}
+
+\begin{linuxinsight}
+    \textbf{LBA and Block Devices}
+    
+    Modern operating systems like Linux have long abandoned CHS addressing.
+\end{linuxinsight}
+
+\section{Knowledge Check}
+\begin{enumerate}
+    \item Why do sectors start at 1 while everything else starts at 0?
+    \item What happens to the data already in memory at \texttt{es:bx} when you perform a disk read?
+    \item What is the purpose of the \texttt{dl} register in disk operations?
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Sector Scrutineer}
+    
+    In our project, the disk loading routine is abstracted in \texttt{boot/disk.asm}. Use this routine to load 2 sectors starting from sector 2 into memory address \texttt{0x9000}. To verify success, use \texttt{db} to place a unique "secret" value at the very beginning of the second sector of your disk image (after the 512-byte boot sector), and have your bootloader print it. This is exactly how we will load our kernel later!
+\end{labchallenge}
+
+\chapter{32-bit Mode and VGA Memory}
+
+Until now, we have been working in \textbf{16-bit Real Mode}. This is the legacy mode that x86 CPUs start in for backward compatibility. To unlock the full potential of modern processors, we must transition to \textbf{Protected Mode}.
+
+\section{The Logic: Breaking the 1MB Barrier}
+
+In the mid-1980s, the 1 MB memory limit of the 8086 was becoming a bottleneck. The 80386 processor introduced "Protected Mode," which allowed for 32-bit addressing (up to 4 GB of RAM) and hardware-level memory protection. This transition marks the point where computers moved from single-tasking machines (like the early PC) to multi-tasking, multi-user systems. It is the "Rubicon" of OS development.
+
+\section{What is Protected Mode?}
+
+Protected Mode introduces several critical features:
+\begin{itemize}
+    \item \textbf{32-bit Registers:} We can use \texttt{eax}, \texttt{ebx}, etc., allowing for 4 GB of direct memory addressing.
+    \item \textbf{Memory Protection:} The hardware can prevent one program from accessing another's memory.
+    \item \textbf{Virtual Memory:} Support for paging.
+\end{itemize}
+
+However, entering Protected Mode has a major downside: \textbf{we lose BIOS interrupts}. No more \texttt{int 0x10} for printing or \texttt{int 0x13} for disk access. We must write our own hardware drivers.
+
+\section{VGA Text Mode}
+
+The simplest way to print in Protected Mode is to write directly to \textbf{VGA Video Memory}. In text mode, this memory is mapped to physical address \texttt{0xB8000}.
+
+The screen is an 80x25 grid. Each character on the screen takes 2 bytes of memory:
+\begin{enumerate}
+    \item \textbf{ASCII Byte:} The character to display.
+    \item \textbf{Attribute Byte:} The foreground and background colors.
+\end{enumerate}
+
+The formula to find the memory address of a character at (row, col) is:
+\[ \text{Address} = 0xB8000 + 2 \times (\text{row} \times 80 + \text{col}) \]
+
+\begin{lstlisting}[language={[x86masm]Assembler}]
+[bits 32]
+VIDEO_MEMORY equ 0xb8000
+WHITE_ON_BLACK equ 0x0f
+
+print_string_pm:
+    pusha
+    mov edx, VIDEO_MEMORY
+.loop:
+    mov al, [ebx]        ; ebx holds the string address
+    mov ah, WHITE_ON_BLACK
+    cmp al, 0
+    je .done
+    mov [edx], ax        ; Write char + attribute to VGA memory
+    add ebx, 1
+    add edx, 2
+    jmp .loop
+.done:
+    popa
+    ret
+\end{lstlisting}
+
+\begin{linuxinsight}
+    \textbf{The Linux Framebuffer}
+    
+    Early in the boot process, Linux might use VGA text mode. However, modern Linux kernels use a \textbf{Framebuffer} (\texttt{fbdev} or DRM/KMS).
+\end{linuxinsight}
+
+\section{Knowledge Check}
+\begin{enumerate}
+    \item Why do we lose BIOS interrupts in Protected Mode?
+    \item What is the physical address of the character at the second row, third column?
+    \item What does the attribute byte \texttt{0x0F} represent?
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: The 32-bit Scribe}
+    
+    Our 32-bit print routine is located in \texttt{boot/32bit\_print.asm}. Study it and modify it to print a string with a different color attribute (e.g., green text on a blue background). You'll need to understand how the attribute byte is structured. Then, use this routine to print "Landed in Protected Mode" as soon as you switch CPU modes.
+\end{labchallenge}
+
+\chapter{The Global Descriptor Table (GDT)}
+
+Before we can flip the switch to 32-bit mode, we must define how memory is handled. In Protected Mode, segmentation is replaced (or rather, redefined) by the \textbf{Global Descriptor Table (GDT)}.
+
+\section{The Logic: From Fixed to Flexible}
+
+In Real Mode, segments were fixed at 64 KB and their base address was hardcoded as \texttt{Segment * 16}. This was simple but inflexible and offered no security. The GDT changed this by making segments "descriptors." A descriptor defines exactly where a segment starts, how long it is, and who is allowed to access it. This allowed the CPU to enforce "privilege levels" (Rings), which is why we call it "Protected Mode."
+
+\section{The GDT Structure}
+
+The GDT is an array of 8-byte \textbf{Segment Descriptors}. Each descriptor tells the CPU:
+\begin{itemize}
+    \item \textbf{Base Address:} Where the segment starts (32 bits).
+    \item \textbf{Limit:} How large the segment is (20 bits).
+    \item \textbf{Access Byte:} Permissions (Read/Write, Executable, Privilege Level).
+    \item \textbf{Flags:} Granularity (1B or 4KB units) and size (16-bit or 32-bit).
+\end{itemize}
+
+\section{The Flat Memory Model}
+
+In modern OS development, we don't want to deal with segments overlapping or being restricted. We use a \textbf{Flat Memory Model}, where we define two segments (Code and Data) that both cover the entire 4 GB of addressable memory (Base 0, Limit 0xFFFFF).
+
+\begin{lstlisting}[language={[x86masm]Assembler}]
+gdt_start:
+    dq 0x0          ; The mandatory null descriptor
+gdt_code:           ; Code segment descriptor
+    dw 0xffff       ; Limit (bits 0-15)
+    dw 0x0          ; Base (bits 0-15)
+    db 0x0          ; Base (bits 16-23)
+    db 10011010b    ; Access byte
+    db 11001111b    ; Flags + Limit (bits 16-19)
+    db 0x0          ; Base (bits 24-31)
+gdt_data:           ; Data segment descriptor
+    ; ... similar to code, but with different access byte (10010010b)
+gdt_end:
+
+gdt_descriptor:
+    dw gdt_end - gdt_start - 1
+    dd gdt_start
+\end{lstlisting}
+
+\begin{linuxinsight}
+    \textbf{GDT in Modern Linux}
+    
+    Even though 64-bit Linux uses paging for almost everything, the GDT is still required by the x86 architecture. Linux sets up a minimal GDT with entries for Kernel Code, Kernel Data, User Code, and User Data.
+\end{linuxinsight}
+
+\section{Knowledge Check}
+\begin{enumerate}
+    \item Why is a "Null Descriptor" required at the start of the GDT?
+    \item What is the purpose of the "Granularity" bit in a segment descriptor?
+    \item In a flat memory model, what is the difference between the Code and Data segments?
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Descriptor Architect}
+    
+    The GDT implementation we use is in \texttt{boot/gdt.asm}. It defines a simple flat memory model. Your task is to calculate the 8-byte value for a segment descriptor that covers only the first 1 MB of memory, is readable, but NOT executable. Compare your calculated bytes with the ones in \texttt{gdt.asm}. This manual calculation is essential for understanding how the hardware actually "sees" your memory configuration.
+\end{labchallenge}
+
+\chapter{The Switch to Protected Mode}
+
+We have our GDT ready. Now it's time to "flip the switch" and enter the 32-bit world. This process is delicate because the CPU changes how it interprets every instruction and memory address instantly.
+
+\section{The Logic: The Pipeline Paradox}
+
+Modern CPUs are incredibly fast because they "pre-fetch" dozens of future instructions and decode them in advance. This is called a \textbf{Pipeline}. When we switch from 16-bit to 32-bit mode, the instructions already in the pipeline are "garbage" because they were decoded as 16-bit code. The far jump (\texttt{jmp CODE\_SEG:init\_pm}) is more than just a jump; it is a "pipeline flush" that forces the CPU to throw away its pre-fetched instructions and start fresh in the new 32-bit mode.
+
+\section{The 7-Step Switch}
+
+To safely transition to Protected Mode, we follow these steps:
+\begin{enumerate}
+    \item \textbf{Disable Interrupts:} We use \texttt{cli}. Since BIOS interrupts won't work in 32-bit mode, and we haven't set up our own Interrupt Descriptor Table (IDT) yet, an interrupt would crash the system.
+    \item \textbf{Load GDT:} Use the \texttt{lgdt} instruction to tell the CPU where our GDT is.
+    \item \textbf{Set CR0 Bit:} The CPU has control registers. Bit 0 of \texttt{cr0} (the PE bit) enables Protected Mode.
+    \item \textbf{The Far Jump:} This flushes the CPU pipeline.
+    \item \textbf{Update Segment Registers:} Set \texttt{ds, ss, es, fs, gs} to point to our Data Segment.
+    \item \textbf{Update Stack:} Move the stack to a safe, 32-bit memory location.
+    \item \textbf{Call Entry Point:} Jump to our first 32-bit code.
+\end{enumerate}
+
+\begin{lstlisting}[language={[x86masm]Assembler}]
+[bits 16]
+switch_to_pm:
+    cli                     ; 1. Disable interrupts
+    lgdt [gdt_descriptor]    ; 2. Load GDT
+    mov eax, cr0
+    or eax, 0x1             ; 3. Set bit 0 in cr0
+    mov cr0, eax
+    jmp CODE_SEG:init_pm    ; 4. Far jump to 32-bit code
+
+[bits 32]
+init_pm:
+    mov ax, DATA_SEG        ; 5. Update segment registers
+    mov ds, ax
+    mov ss, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    mov ebp, 0x90000        ; 6. Update stack
+    mov esp, ebp
+
+    call BEGIN_PM           ; 7. Call 32-bit entry point
+\end{lstlisting}
+
+\begin{linuxinsight}
+    \textbf{Pipelining and Pre-fetching}
+    
+    In the Linux kernel source, this transition happens in \texttt{arch/x86/boot/pm.c} and \texttt{arch/x86/boot/pmjump.S}.
+\end{linuxinsight}
+
+\section{Knowledge Check}
+\begin{enumerate}
+    \item What does the \texttt{cli} instruction do, and why is it necessary here?
+    \item Why can't we just use a regular \texttt{jmp} instead of a far jump?
+    \item What happens to the \texttt{cs} register after the \texttt{jmp CODE\_SEG:init\_pm}?
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: The 32-bit Milestone}
+    
+    The switching logic is implemented in \texttt{boot/switch\_pm.asm}. Study this file and integrate it into your main boot sector. Your goal is to print "Started in 16-bit Mode", perform the switch, and then print "Landed in 32-bit Protected Mode" using the VGA routine from Chapter 9. This is the ultimate test of your bootloader's stability.
+\end{labchallenge}
+
+\chapter{C for Kernels}
+
+Writing an OS entirely in assembly is possible but impractical. We want to use a higher-level language like C. However, "Kernel C" is different from "Application C".
+
+\section{The Philosophy: The Unix Revolution}
+
+When Unix was first written in the early 1970s, it was almost entirely in Assembly. Dennis Ritchie and Ken Thompson realized that to make Unix portable, they needed a language that was "close to the hardware" but expressive enough to manage complex logic. This led to the creation of the C language. Today, C is the "lingua franca" of systems programming because it allows us to control the hardware with the elegance of a high-level language.
+
+\section{The Freestanding Environment}
+
+When you write a normal C program, you have access to the \textbf{Standard Library}. In OS development, we use the \texttt{-ffreestanding} flag. This tells the compiler that the standard library might not be available. We only get a few headers like \texttt{<stdint.h>}.
+
+\section{Why kernel\_main and not main?}
+
+The C standard expects a function named \texttt{main} to be the entry point. To avoid this and clearly distinguish our entry point, we use \texttt{kernel\_main()}.
+
+\begin{linuxinsight}
+    \textbf{The No-Libc World}
+    
+    The Linux kernel does not use \texttt{glibc}. Instead, it implements its own versions of essential functions like \texttt{printk()}.
+\end{linuxinsight}
+
+\begin{labchallenge}
+    \textbf{Challenge: The C-Side}
+    
+    Our main kernel entry point is in \texttt{kernel/kernel.c}. Your task is to implement a simple loop in this file that writes characters to the VGA memory (starting at \texttt{0xB8000}) one by one. This confirms that your C compiler is producing code that can correctly interact with hardware memory. Use pointers!
+\end{labchallenge}
+
+\chapter{The Linker and Object Files}
+
+\section{The Logic: Resolving the Mystery}
+
+The compiler processes one file at a time. If `main.c` calls a function in `util.c`, the compiler doesn't know where that function will eventually live in memory. It leaves a "placeholder" or a "symbol" in the object file. The Linker's primary job is to act as a matchmaker: it finds the actual memory addresses for all these symbols and stitches the object files together into a coherent whole.
+
+\section{The Linker's Job}
+
+The Linker (\texttt{ld}) takes multiple object files and merges them. It resolves symbols and decides memory layout.
+
+\begin{linuxinsight}
+    \textbf{The vmlinux ELF}
+    
+    The final Linux kernel image is an ELF file called \texttt{vmlinux}.
+\end{linuxinsight}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Symbol Inspector}
+    
+    Compile your \texttt{kernel.c} but don't link it yet. Use the command \texttt{i686-elf-nm kernel.o} to see the symbol table. Find your \texttt{kernel\_main} symbol. This knowledge is invaluable when troubleshooting "Undefined Reference" errors during the linking phase.
+\end{labchallenge}
+
+\chapter{The Barebones Kernel}
+
+\section{The Logic: The Glue Code}
+
+When a C function is called, it expects the stack to be set up in a specific way, and it expects to be called from code that knows the ABI. Our bootloader is raw assembly. The \texttt{kernel\_entry.asm} file acts as the glue (or "shim") that provides a clean entry point for the CPU to transition from the raw world of the bootloader into the structured world of C.
+
+\section{The Entry Point}
+
+Create \texttt{kernel\_entry.asm}:
+\begin{lstlisting}[language={[x86masm]Assembler}]
+[bits 32]
+[extern kernel_main] ; Defined in kernel.c
+call kernel_main     ; Jump to the C function
+jmp $                ; Hang if kernel returns
+\end{lstlisting}
+
+\section{Knowledge Check}
+\begin{enumerate}
+    \item Why is the \texttt{-ffreestanding} flag necessary?
+    \item What is an \texttt{extern} label in assembly?
+    \item Why do we link the kernel at \texttt{0x1000} instead of \texttt{0x0}?
+\end{enumerate}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Kernel Concatenator}
+    
+    In our project, we use a \texttt{Makefile} to handle the concatenation, but doing it manually once is instructive. Use \texttt{cat} to merge your \texttt{bootsect.bin} and \texttt{kernel.bin}. Use a hex editor to find the exact byte where your bootloader ends and your kernel begins. Verify that the kernel code starts at exactly byte 512.
+\end{labchallenge}
+
+\chapter{Automating with Makefiles}
+
+\section{The Philosophy: Declarative Building}
+
+In the early days, programmers wrote long shell scripts to compile their projects. This was slow because it recompiled everything every time. Stuart Feldman created \texttt{make} in 1976 at Bell Labs to solve this. Instead of telling the computer \textit{how} to build (imperative), you tell it what the \textit{dependencies} are (declarative). Make then calculates the most efficient way to build the project, only recompiling files that have changed.
+
+\section{The Makefile Structure}
+
+A Makefile consists of \textbf{Rules}:
+\begin{lstlisting}[language=make]
+target: dependencies
+    command
+\end{lstlisting}
+
+\begin{linuxinsight}
+    \textbf{The Linux Makefile}
+    
+    The Linux kernel Makefile is one of the most complex pieces of software engineering in existence.
+\end{linuxinsight}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Makefile Mechanic}
+    
+    Our project's \texttt{Makefile} is in the root directory. Your task is to add a new rule called \texttt{disassemble} that uses \texttt{i686-elf-objdump} to show the assembly code of your linked \texttt{kernel.bin}. This is a crucial skill for verifying that your C code is being translated into the machine instructions you expect.
+\end{labchallenge}
+
+\chapter{Hardware I/O with Ports}
+
+\section{The Logic: The Second Address Space}
+
+The x86 architecture is unusual because it has a completely separate address space for hardware devices, distinct from main RAM. This is called \textbf{Port-Mapped I/O}. Originally, this was done to simplify motherboard wiring—hardware could be controlled without interfering with the limited memory space available for programs. Today, while most high-speed hardware uses memory mapping, legacy devices like the keyboard controller and VGA registers still rely on these 16-bit ports.
+
+\section{Port-Mapped I/O}
+
+Each hardware device is assigned a "Port Number" (from 0 to 65535). We use two special assembly instructions to talk to these ports: \texttt{in} and \texttt{out}.
+
+\begin{linuxinsight}
+    \textbf{MMIO vs. PMIO}
+    
+    Most modern hardware (PCIe cards, NVMe drives) uses \textbf{Memory-Mapped I/O (MMIO)}.
+\end{linuxinsight}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Cursor Mover}
+    
+    Implement a function \texttt{set\_cursor(int offset)} in \texttt{drivers/screen.c}. It should calculate the high and low bytes of the offset and write them to the VGA ports \texttt{0x3D4} and \texttt{0x3D5} to move the blinking cursor. This is your first real "driver" code that controls hardware behavior through software.
+\end{labchallenge}
+
+\chapter{The Video Driver}
+
+\section{The Logic: Abstraction Layers}
+
+A kernel shouldn't have to worry about ASCII codes or memory addresses every time it wants to log a message. The Video Driver provides an \textbf{Abstraction Layer}. By creating functions like \texttt{kprint()}, we allow the rest of the kernel to treat the screen as a high-level console, hiding the messy details of VGA memory and attribute bytes.
+
+\section{The kprint API}
+
+Our driver provides \texttt{kprint\_at}, \texttt{kprint}, and \texttt{clear\_screen}.
+
+\begin{linuxinsight}
+    \textbf{Escape Sequences (ANSI)}
+    
+    Modern terminal drivers in Linux interpret \textbf{ANSI Escape Sequences}.
+\end{linuxinsight}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Colorized Kernel}
+    
+    Our video driver is in \texttt{drivers/screen.c}. Your task is to implement \texttt{kprint\_at\_color(char *message, int col, int row, char attr)}, which allows you to print strings in different colors. Use this to print "ERROR" messages in red and "SUCCESS" messages in green. This makes your kernel much more user-friendly.
+\end{labchallenge}
+
+\chapter{Screen Scrolling}
+
+\section{The Logic: The TTY Legacy}
+
+In the days of physical Teletype (TTY) machines, text was printed on a continuous roll of paper. When the paper reached the bottom, the user just unrolled more. Computers mimicked this behavior by "scrolling" the screen content up. This is a purely software-driven illusion: we are moving bytes from one part of video memory to another to simulate motion.
+
+\section{The Scrolling Logic}
+
+Scrolling in VGA text mode is usually done by shifting every row of characters up by one and then clearing the last row.
+
+\begin{labchallenge}
+    \textbf{Challenge: The Smooth Scroller}
+    
+    Update your \texttt{print\_char} in \texttt{drivers/screen.c} to handle the newline character (\texttt{\textbackslash n}). It should set the cursor to the beginning of the next row. If it was already on the last row, it should trigger the scrolling logic by calling \texttt{memory\_copy} to shift the rows. This is essential for a working shell.
+\end{labchallenge}
+
+\chapter{Interrupts and the IDT}
+
+\section{The Logic: The CPU as an Event-Driven Machine}
+
+Most of the time, an operating system does nothing—it waits. It waits for you to press a key, for a timer to tick, or for data to arrive from the network. This "waiting" is managed by \textbf{Interrupts}. An interrupt is a signal from hardware that demands the CPU's immediate attention. Instead of the CPU "polling" (checking hardware repeatedly), the hardware "interrupts" the CPU. This event-driven model is what makes multitasking possible.
+
+\section{The Interrupt Descriptor Table (IDT)}
+
+The IDT maps interrupt numbers to handlers. Gates 0-31 are for CPU exceptions.
+
+\textbf{Crucial Fix:} In modern systems, we must pass the CPU state to our C handler as a \textbf{pointer} (\texttt{registers\_t *}).
+
+\begin{linuxinsight}
+    \textbf{Top Halves and Bottom Halves}
+    
+    Linux splits interrupt handling into two parts to keep the system responsive.
+\end{linuxinsight}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Great Exception}
+    
+    Our interrupt handlers are installed in \texttt{cpu/isr.c}. Your task is to intentionally trigger a "Divide by Zero" exception in \texttt{kernel/kernel.c}. Verify that your OS doesn't just crash silently, but instead prints "Division By Zero" and the register dump using your pointer-based \texttt{isr\_handler}. This proves your IDT is correctly installed and accessible.
+\end{labchallenge}
+
+\chapter{Remapping the PIC}
+
+\section{The Logic: Legacy Hardware Coordination}
+
+The 8259 PIC was designed in the late 1970s for the 8085 processor. When the IBM PC was designed, they used two of these chips to handle 15 IRQs. However, they chose interrupt vectors that overlapped with the CPU's internal exceptions. This design flaw persists in every PC to this day. Remapping the PIC is our way of cleaning up after the hardware engineers of 1981.
+
+\section{Communicating with the PIC}
+
+We remap the PIC so that its interrupts start at \texttt{0x20}.
+
+\begin{linuxinsight}
+    \textbf{APIC and MSI}
+    
+    Modern systems use the \textbf{APIC} and \textbf{MSI}, bypassing the legacy PIC entirely.
+\end{linuxinsight}
+
+\begin{labchallenge}
+    \textbf{Challenge: The IRQ Verification}
+    
+    The PIC remapping code is in \texttt{cpu/isr.c}. Your task is to implement a temporary handler for IRQ 1 (the keyboard). Once your PIC is remapped, pressing a key should trigger your new handler at interrupt vector \texttt{0x21} (32 + 1). Use \texttt{kprint} inside the handler to confirm that the IRQ is being correctly routed to the new vector.
+\end{labchallenge}
+
+\chapter{The Hardware Timer}
+
+\section{The Logic: The Pulse of the Machine}
+
+An operating system needs a sense of time. Without it, we can't tell how long a process has been running, we can't provide a \texttt{sleep()} function, and we can't implement preemptive multitasking. The \textbf{PIT} (Programmable Interval Timer) provides this pulse. By setting it to tick 100 times a second, we create a "system tick" that allows the kernel to maintain order.
+
+\section{Configuring the PIT}
+
+The PIT is configured via its command and data ports.
+
+\begin{linuxinsight}
+    \textbf{Tickless Kernels}
+    
+    Modern Linux supports \textbf{CONFIG\_NO\_HZ} to save power.
+\end{linuxinsight}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Heartbeat Monitor}
+    
+    Our timer implementation is in \texttt{cpu/timer.c}. Your task is to calculate the divisor required for a 1000 Hz timer (1 tick per millisecond). Update the \texttt{init\_timer} call in \texttt{kernel/kernel.c} and implement a \texttt{get\_ticks()} function that returns the total number of milliseconds since the OS started. Use this to print a message every 5 seconds.
+\end{labchallenge}
+
+\chapter{The Keyboard and Shell}
+
+\section{The Logic: From Pulses to Commands}
+
+Keyboard input is surprisingly complex. When you press a key, the keyboard controller sends a "scancode"—a raw number representing the physical key. It doesn't know about Shift, Caps Lock, or "A" vs "a". Our driver must track the state of "modifier keys" and translate these scancodes into ASCII characters. Only then can our shell take these characters and turn them into commands that the OS understands.
+
+\section{Scancodes and Translation}
+
+Our keyboard driver translates scancodes to ASCII.
+
+\begin{linuxinsight}
+    \textbf{The TTY Subsystem}
+    
+    In Linux, the TTY layer handles "canonical mode" (line-buffering).
+\end{linuxinsight}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Command Handler}
+    
+    Our shell logic is in \texttt{kernel/shell.c}. Your task is to implement a new command called \texttt{"VERSION"} that prints the current version of your OS and the name of the professor (you!). This involves adding a string comparison in the command parser and a corresponding action. This is how you will eventually build a full suite of system utilities.
+\end{labchallenge}
+
+\chapter{Memory Management (kmalloc)}
+
+\section{The Logic: The Finite Frontier}
+
+Physical RAM is a finite resource. In the early boot stages, we can just hardcode where things go. But once we have multiple processes, we need a way to dynamically allocate memory and, eventually, free it. Our \texttt{kmalloc} is the most primitive form of a memory manager—a "bump allocator" that just moves a pointer forward. While simple, it is the essential first step toward a full heap manager.
+
+\section{The Primitive kmalloc}
+
+Our allocator starts at a safe address and moves forward.
+
+\begin{linuxinsight}
+    \textbf{Buddy Systems and SLABs}
+    
+    Linux uses the \textbf{Buddy System} and \textbf{SLAB Allocator}.
+\end{linuxinsight}
+
+\begin{labchallenge}
+    \textbf{Challenge: The Memory Logger}
+    
+    Our memory allocator is in \texttt{libc/mem.c}. Your task is to modify \texttt{kmalloc} to print a debug message every time it is called, showing the requested size and the physical address being returned. Then, use your shell's \texttt{"MALLOC"} command to allocate memory and verify the addresses are incrementing correctly. Does the 4KB alignment work as expected?
+\end{labchallenge}
+
+\chapter{The Road Ahead}
+
+\section{The Philosophy: The Professional Edge}
+
+What separates a hobby project from a professional kernel is attention to detail and adherence to standards. By applying the "Fixes" (pointer-based register passing, ffreestanding, proper stack alignment), we have moved beyond simple tutorials and into the realm of real systems engineering. These practices are the same ones used by engineers at Microsoft, Google, and Apple every day.
+
+\section{The Importance of the "Fixes"}
+
+We have ensured ABI compatibility, stack alignment, and portable types.
+
+\section{What's Next?}
+
+Paging, Multitasking, File Systems, and User Mode.
+
+\begin{labchallenge}
+    \textbf{Challenge: The Codebase Audit}
+    
+    Your final task is to perform a "Security Audit" of your codebase. Look at every function that takes a string input (like \texttt{kprint} or \texttt{append}). Does it check for buffer overflows? If you enter a 1000-character command in your shell, will it crash your OS? Fixing these vulnerabilities is the first step toward building a secure, production-ready operating system.
+\end{labchallenge}
+
+\chapter*{References}
+\addcontentsline{toc}{chapter}{References}
+\begin{itemize}
+    \item \textit{The Little Book About OS Development} (https://littleosbook.github.io)
+    \item \textit{OSDev Wiki} (https://wiki.osdev.org)
+    \item \textit{Intel 64 and IA-32 Architectures Software Developer Manuals}
+    \item \textit{The Linux Kernel Archives} (https://kernel.org)
+\end{itemize}
+
+\end{document}
