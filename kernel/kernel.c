@@ -1,5 +1,6 @@
 #include "../cpu/isr.h"
 #include "../cpu/gdt.h"
+#include "../cpu/tss.h"
 #include "../cpu/paging.h"
 #include "../cpu/syscall.h"
 #include "../fs/fs.h"
@@ -9,6 +10,7 @@
 #include "kernel.h"
 #include "shell.h"
 #include "editor.h"
+#include "input.h"
 #include "../libc/string.h"
 #include <stdint.h>
 
@@ -22,7 +24,7 @@ void kernel_main() {
     init_fs();
     init_syscalls();
     
-    // Explicitly init keyboard states
+    input_init();
     init_keyboard();
 
     shell_init();
@@ -47,4 +49,16 @@ void user_input(char *input) {
     
     // Always set backspace limit based on the current prompt/status
     set_backspace_limit(get_cursor_offset());
+}
+
+void user_key_press(uint8_t scancode) {
+    if (current_kernel_mode == MODE_SHELL) {
+        if (scancode == 0x48) { // UP
+            shell_history_up();
+        } else if (scancode == 0x50) { // DOWN
+            shell_history_down();
+        }
+    } else if (current_kernel_mode == MODE_EDIT) {
+        editor_handle_key(scancode);
+    }
 }

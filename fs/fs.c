@@ -94,7 +94,6 @@ int32_t fs_read(int32_t fd, uint8_t *buffer, uint32_t size) {
 }
 
 void fs_list(int16_t parent) {
-    kprint("Listing directory content:\n");
     for (int i = 0; i < MAX_FILES; i++) {
         if (files[i].used && files[i].parent_index == parent) {
             if (files[i].is_dir) kprint_color("[DIR] ", VGA_COLOR_LIGHT_BLUE, VGA_COLOR_BLACK);
@@ -122,4 +121,29 @@ char* fs_get_name(int16_t fd) {
     if (fd == -1) return "/";
     if (fd < 0 || fd >= MAX_FILES || !files[fd].used) return "";
     return files[fd].name;
+}
+
+void fs_get_path(int16_t fd, char *buffer) {
+    if (fd == -1) {
+        strcpy(buffer, "/");
+        return;
+    }
+
+    int16_t current = fd;
+    
+    // Simple way to build path: build it backwards
+    
+    char parts[MAX_FILES][MAX_FILENAME];
+    int count = 0;
+    
+    while (current != -1 && count < MAX_FILES) {
+        strcpy(parts[count++], files[current].name);
+        current = files[current].parent_index;
+    }
+    
+    strcpy(buffer, "/");
+    for (int i = count - 1; i >= 0; i--) {
+        strcat(buffer, parts[i]);
+        if (i > 0) strcat(buffer, "/");
+    }
 }

@@ -26,5 +26,6 @@ uint32_t fs_get_size(int32_t fd);
 int16_t fs_get_parent(int16_t fd);
 uint8_t fs_is_dir(int16_t fd);
 char* fs_get_name(int16_t fd);
+void fs_get_path(int16_t fd, char *buffer);
 
 #endif

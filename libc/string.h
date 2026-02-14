@@ -12,6 +12,7 @@ void append(char s[], char n);
 int strcmp(char s1[], char s2[]);
 int strncmp(const char *s1, const char *s2, size_t n);
 void strcpy(char *dest, char *src);
+void strcat(char *dest, const char *src);
 char tolower(char c);
 int strcmpi(char s1[], char s2[]);
 

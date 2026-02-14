@@ -1,5 +1,5 @@
 #ifndef EDITOR_H
-#define SHELL_H
+#define EDITOR_H
 
 #include <stdint.h>
 
@@ -13,6 +13,8 @@ extern kernel_mode_t current_kernel_mode;
 
 void editor_init(char *filename, int16_t dir_idx);
 void editor_handle_input(char *input);
+void editor_handle_char(char c);
+void editor_handle_key(uint8_t scancode);
 void editor_trigger_exit();
 void editor_draw_ui();
 

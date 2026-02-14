@@ -89,6 +89,15 @@ void strcpy(char *dest, char *src) {
     dest[i] = '\0';
 }
 
+void strcat(char *dest, const char *src) {
+    size_t i = strlen(dest);
+    size_t j = 0;
+    while (src[j] != '\0') {
+        dest[i++] = src[j++];
+    }
+    dest[i] = '\0';
+}
+
 int strncmp(const char *s1, const char *s2, size_t n) {
     for (size_t i = 0; i < n; i++) {
         if (s1[i] != s2[i]) return s1[i] - s2[i];

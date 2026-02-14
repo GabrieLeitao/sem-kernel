@@ -22,5 +22,7 @@ void set_backspace_limit(int limit);
 int get_cursor_offset();
 void set_cursor(int col, int row);
 int get_offset(int col, int row);
+int get_offset_row(int offset);
+int get_offset_col(int offset);
 
 #endif
